@@ -1,0 +1,31 @@
+name: 每日權值股 AI 晨報
+
+on:
+  schedule:
+    # 台灣時間 週一~週六 06:50 = UTC 週日~週五 22:50 (台灣是 UTC+8)
+    - cron: "50 22 * * 0-5"
+  # 允許在 GitHub 網頁上手動按按鈕，馬上跑一次來測試
+  workflow_dispatch:
+
+jobs:
+  run-report:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout 程式碼
+        uses: actions/checkout@v4
+
+      - name: 安裝 Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: 安裝套件
+        run: pip install -r requirements.txt
+
+      - name: 執行分析、生成 AI 晨報並寄送 Email
+        env:
+          RESEND_API_KEY: ${{ secrets.RESEND_API_KEY }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          TO_EMAIL: ${{ secrets.TO_EMAIL }}
+          FINMIND_TOKEN: ${{ secrets.FINMIND_TOKEN }}
+        run: python main.py
