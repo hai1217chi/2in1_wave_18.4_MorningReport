@@ -1,0 +1,14 @@
+# GitHub Actions 執行 main.py 只需要 engine.py 的量化運算套件 + requests
+# （不需要 gradio / spaces，因為這裡不啟動網頁介面，只是背景執行分析後寄信）
+pandas
+numpy
+yfinance
+FinMind
+ta
+lightgbm
+xgboost
+scikit-learn
+openpyxl
+requests
+shap
+optuna
