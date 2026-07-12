@@ -45,19 +45,30 @@ def send_line_broadcast(text: str, channel_access_token: str) -> None:
 
 def build_digest_message(category_results: list) -> str:
     """
-    組出給 LINE 的精簡摘要文字（不像 Email 那麼長，LINE 適合快速看重點）。
-    category_results: main.py 裡收集的每個類股分析結果列表。
+    組出給 LINE 的摘要文字。因為 LINE 訊息有長度上限（見 _MAX_LEN），
+    這裡挑幾個晨報裡最關鍵的章節（盤勢、策略、風險、推薦股票、總結），
+    不是只放一句總結——目標是讓人不用點開 Email 也能抓到重點。
     """
     import ai_report  # 延遲 import，避免循環引用疑慮
 
-    lines = ["📊 每日 AI 晨報摘要", ""]
+    sections_to_include = [
+        ("📌 今天盤勢", "今天盤勢"),
+        ("🎯 今日操作策略", "今日操作策略"),
+        ("⚠️ 風險提醒", "風險提醒"),
+        ("💎 推薦股票", "推薦股票"),
+        ("💡 一句總結", "一句總結"),
+    ]
+
+    blocks = ["📊 每日 AI 晨報摘要\n"]
     for r in category_results:
         tab_name = r["tab_name"]
         briefing = r.get("ai_briefing", "")
-        one_liner = ai_report.extract_section(briefing, "一句總結") or "（本次無總結內容）"
-        lines.append(f"【{tab_name}】")
-        lines.append(one_liner)
-        lines.append("")
+        blocks.append(f"━━━━━━━━━━\n【{tab_name}】\n")
 
-    lines.append("完整晨報請見 Email 附件（Excel + PDF）。")
-    return "\n".join(lines).strip()
+        for label, heading in sections_to_include:
+            content = ai_report.extract_section(briefing, heading)
+            if content:
+                blocks.append(f"{label}\n{content}\n")
+
+    blocks.append("━━━━━━━━━━\n完整晨報（含黑馬觀察、類股輪動、市場快照）請見 Email 附件。")
+    return "\n".join(blocks).strip()

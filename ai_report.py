@@ -191,6 +191,26 @@ def extract_section(md_text: str, heading: str) -> str:
     return "\n".join(collected).strip()
 
 
+def markdown_to_html(md_text: str) -> str:
+    """
+    非常簡易的 Markdown → HTML 轉換，只處理晨報會用到的樣式（## 標題、純文字段落）。
+    main.py（Email 內文）跟 dashboard.py（網頁卡片）共用這一份，避免各自維護不同邏輯。
+    """
+    lines = md_text.strip().split("\n")
+    html_lines = []
+    for line in lines:
+        stripped = line.strip()
+        if stripped.startswith("## "):
+            html_lines.append(f"<h3>{stripped[3:]}</h3>")
+        elif stripped.startswith("# "):
+            html_lines.append(f"<h2>{stripped[2:]}</h2>")
+        elif stripped == "":
+            html_lines.append("<br>")
+        else:
+            html_lines.append(f"<p>{stripped}</p>")
+    return "\n".join(html_lines)
+
+
 def call_gemini(prompt: str, api_key: str) -> str:
     """呼叫 Gemini API，回傳生成的文字內容。"""
     resp = requests.post(

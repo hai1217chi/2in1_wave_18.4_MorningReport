@@ -41,8 +41,18 @@ h1 { font-size:22px; }
 .risk-CRASH { background:#efebe9; color:#4e342e; }
 .signals { margin:10px 0; font-size:13px; color:#444; }
 .stocks { margin:10px 0; font-size:14px; }
-.summary { margin-top:10px; padding-top:10px; border-top:1px dashed #ddd;
-           font-size:13px; color:#555; line-height:1.5; }
+.one-liner { margin-top:10px; padding-top:10px; border-top:1px dashed #ddd;
+             font-size:13px; color:#555; line-height:1.5; font-weight:600; }
+.full-briefing { margin-top:10px; font-size:13px; }
+.full-briefing summary { cursor:pointer; color:#3949ab; font-weight:600; }
+.briefing-body { margin-top:10px; line-height:1.7; font-size:13px; color:#333; }
+.briefing-body h2, .briefing-body h3 { font-size:14px; margin:14px 0 6px 0; color:#1a237e; }
+.briefing-body p { margin:4px 0; }
+.market-card { width:100%; }
+.market-card table { border-collapse:collapse; margin:6px 0 12px 0; font-size:13px; }
+.market-card td { padding:3px 10px 3px 0; }
+.market-card .up { color:#c62828; }
+.market-card .down { color:#2e7d32; }
 .archive { margin-top:30px; font-size:13px; }
 .archive a { color:#3949ab; text-decoration:none; margin-right:10px; }
 .disclaimer { margin-top:24px; font-size:12px; color:#999; }
@@ -84,6 +94,9 @@ def _render_card(result: dict) -> str:
 
     one_liner = ai_report.extract_section(briefing, "一句總結") or "（無總結）"
 
+    # 完整晨報內容（今天盤勢、國際新聞觀察、操作策略、類股輪動、黑馬觀察、風險提醒、推薦股票...全部呈現）
+    briefing_html = ai_report.markdown_to_html(briefing)
+
     return f"""
     <div class="card">
         <h2>{tab_name}</h2>
@@ -91,12 +104,48 @@ def _render_card(result: dict) -> str:
         <span class="tag">市場模式：{market_mode}</span>
         <div class="signals">訊號分布：{signal_line}</div>
         <div class="stocks"><b>推薦關注：</b>{picks_html}</div>
-        <div class="summary">{one_liner}</div>
+        <div class="one-liner">💡 {one_liner}</div>
+        <details class="full-briefing">
+            <summary>📋 查看完整 AI 晨報內容</summary>
+            <div class="briefing-body">{briefing_html}</div>
+        </details>
     </div>
     """
 
 
-def _render_page(category_results: list, date_str: str, archive_links_html: str = "") -> str:
+def _render_market_snapshot(market_snapshot: dict) -> str:
+    """把大盤/美股/國際市場快照渲染成一個獨立卡片，放在類股卡片上方。"""
+    if not market_snapshot:
+        return ""
+
+    groups_html = []
+    for group_name, items in market_snapshot.items():
+        rows = "".join(
+            f'<tr><td>{name}</td><td>{v.get("收盤")}</td>'
+            f'<td class="{"up" if v.get("漲跌%", 0) >= 0 else "down"}">{v.get("漲跌%")}%</td></tr>'
+            for name, v in items.items()
+        )
+        if rows:
+            groups_html.append(f"<b>{group_name}</b><table>{rows}</table>")
+
+    if not groups_html:
+        return ""
+
+    return f"""
+    <div class="card market-card">
+        <h2>🌍 市場快照</h2>
+        {''.join(groups_html)}
+    </div>
+    """
+
+
+def _render_page(
+    category_results: list,
+    date_str: str,
+    archive_links_html: str = "",
+    market_snapshot: dict | None = None,
+) -> str:
+    market_card_html = _render_market_snapshot(market_snapshot or {})
     cards_html = "\n".join(_render_card(r) for r in category_results)
     return f"""<!DOCTYPE html>
 <html lang="zh-Hant">
@@ -109,6 +158,7 @@ def _render_page(category_results: list, date_str: str, archive_links_html: str 
 <h1>📊 每日 AI 晨報 Dashboard</h1>
 <div class="date">{date_str} 自動產生</div>
 <div class="grid">
+{market_card_html}
 {cards_html}
 </div>
 <div class="archive">
@@ -120,10 +170,10 @@ def _render_page(category_results: list, date_str: str, archive_links_html: str 
 """
 
 
-def update_dashboard(category_results: list) -> None:
+def update_dashboard(category_results: list, market_snapshot: dict | None = None) -> None:
     """
     主要進入點：輸入 main.py 收集好的 category_results
-    （每個元素需要有 tab_name / summary_data / ai_briefing），
+    （每個元素需要有 tab_name / summary_data / ai_briefing），以及市場快照，
     產生今天的存檔頁 + 更新首頁 index.html。
     """
     os.makedirs(REPORTS_DIR, exist_ok=True)
@@ -139,7 +189,7 @@ def update_dashboard(category_results: list) -> None:
         f'<a href="reports/{d}.html">{d}</a>' for d in existing_dates[:14]
     )
 
-    page_html = _render_page(category_results, date_str, archive_links)
+    page_html = _render_page(category_results, date_str, archive_links, market_snapshot)
 
     # 寫入今天的存檔頁
     with open(os.path.join(REPORTS_DIR, f"{date_str}.html"), "w", encoding="utf-8") as f:
@@ -148,7 +198,7 @@ def update_dashboard(category_results: list) -> None:
     # 更新首頁（跟今天的存檔頁內容一樣，但路徑在 docs/index.html，GitHub Pages 預設進入點）
     # 首頁裡的歷史連結需要補上「今天」自己也算一筆歷史（給明天之後的頁面連過來用）
     index_archive_links = f'<a href="reports/{date_str}.html">{date_str}</a>' + archive_links
-    index_html = _render_page(category_results, date_str, index_archive_links)
+    index_html = _render_page(category_results, date_str, index_archive_links, market_snapshot)
     with open(os.path.join(DOCS_DIR, "index.html"), "w", encoding="utf-8") as f:
         f.write(index_html)
 

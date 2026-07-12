@@ -121,23 +121,6 @@ def run_one_category(tab_name: str, gid: str, market_snapshot: dict, news_headli
     }
 
 
-def markdown_to_html(md_text: str) -> str:
-    """非常簡易的 Markdown → HTML 轉換，只處理 email 晨報會用到的樣式。"""
-    lines = md_text.strip().split("\n")
-    html_lines = []
-    for line in lines:
-        stripped = line.strip()
-        if stripped.startswith("## "):
-            html_lines.append(f"<h3>{stripped[3:]}</h3>")
-        elif stripped.startswith("# "):
-            html_lines.append(f"<h2>{stripped[2:]}</h2>")
-        elif stripped == "":
-            html_lines.append("<br>")
-        else:
-            html_lines.append(f"<p>{stripped}</p>")
-    return "\n".join(html_lines)
-
-
 def send_email_with_report(category_results: list) -> None:
     api_key = os.environ["RESEND_API_KEY"]
     today = datetime.now().strftime("%Y-%m-%d")
@@ -156,7 +139,7 @@ def send_email_with_report(category_results: list) -> None:
             attachments.append({"filename": os.path.basename(r["pdf_path"]), "content": encoded_pdf})
 
         sections_html.append(f"<h2>📌 {r['tab_name']}</h2>")
-        sections_html.append(markdown_to_html(r["ai_briefing"]))
+        sections_html.append(ai_report.markdown_to_html(r["ai_briefing"]))
         sections_html.append("<hr>")
 
     category_names = "、".join(r["tab_name"] for r in category_results)
@@ -208,9 +191,9 @@ def send_line_digest(category_results: list) -> None:
         print(f"⚠️ LINE 通知發送失敗（{e}），不影響其他流程。", file=sys.stderr)
 
 
-def update_dashboard_safe(category_results: list) -> None:
+def update_dashboard_safe(category_results: list, market_snapshot: dict) -> None:
     try:
-        dashboard.update_dashboard(category_results)
+        dashboard.update_dashboard(category_results, market_snapshot)
     except Exception as e:
         print(f"⚠️ Dashboard 更新失敗（{e}），不影響其他流程。", file=sys.stderr)
 
@@ -230,7 +213,7 @@ def main() -> None:
     print("📧 郵件已寄出。")
 
     send_line_digest(category_results)
-    update_dashboard_safe(category_results)
+    update_dashboard_safe(category_results, market_snapshot)
 
 
 if __name__ == "__main__":
