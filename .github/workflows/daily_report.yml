@@ -7,6 +7,10 @@ on:
   # 允許在 GitHub 網頁上手動按按鈕，馬上跑一次來測試
   workflow_dispatch:
 
+# 需要 write 權限，讓 workflow 最後可以把 docs/（Dashboard 網頁）commit 回 repo
+permissions:
+  contents: write
+
 jobs:
   run-report:
     runs-on: ubuntu-latest
@@ -22,10 +26,19 @@ jobs:
       - name: 安裝套件
         run: pip install -r requirements.txt
 
-      - name: 執行分析、生成 AI 晨報並寄送 Email
+      - name: 執行分析、生成 AI 晨報並寄送 Email / LINE
         env:
           RESEND_API_KEY: ${{ secrets.RESEND_API_KEY }}
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
           TO_EMAIL: ${{ secrets.TO_EMAIL }}
           FINMIND_TOKEN: ${{ secrets.FINMIND_TOKEN }}
+          LINE_CHANNEL_ACCESS_TOKEN: ${{ secrets.LINE_CHANNEL_ACCESS_TOKEN }}
         run: python main.py
+
+      - name: 更新 Dashboard（把 docs/ 變更 commit 回 repo）
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add docs
+          git diff --cached --quiet || git commit -m "📊 更新每日 Dashboard $(date +'%Y-%m-%d')"
+          git push
