@@ -170,6 +170,27 @@ def build_prompt(
     return prompt
 
 
+def extract_section(md_text: str, heading: str) -> str:
+    """
+    從晨報 Markdown 文字中，擷取指定 "## 標題" 底下的內容，直到下一個 "##" 或結尾為止。
+    給 dashboard.py / line_notify.py 共用，避免重複解析邏輯。
+    """
+    lines = md_text.split("\n")
+    capture = False
+    collected = []
+    for line in lines:
+        stripped = line.strip()
+        if stripped.startswith("## "):
+            if capture:
+                break
+            if stripped[3:].strip() == heading:
+                capture = True
+                continue
+        elif capture:
+            collected.append(line)
+    return "\n".join(collected).strip()
+
+
 def call_gemini(prompt: str, api_key: str) -> str:
     """呼叫 Gemini API，回傳生成的文字內容。"""
     resp = requests.post(
