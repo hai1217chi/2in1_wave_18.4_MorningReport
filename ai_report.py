@@ -86,7 +86,12 @@ def build_sector_heat_ranking(summary_data: list) -> list:
     return [{"類股": tag, "熱度分數(0-100)": heat} for tag, heat in ranked]
 
 
-def build_prompt(summary_data: list, tab_name: str) -> str:
+def build_prompt(
+    summary_data: list,
+    tab_name: str,
+    market_snapshot: dict | None = None,
+    news_headlines: dict | None = None,
+) -> str:
     """組出交給 Gemini 的完整 Prompt，固定格式，每天都用同一套。"""
     compact = [_to_compact_record(d) for d in summary_data]
     data_json = json.dumps(compact, ensure_ascii=False, indent=None)
@@ -97,7 +102,18 @@ def build_prompt(summary_data: list, tab_name: str) -> str:
     sector_heat = build_sector_heat_ranking(summary_data)
     sector_json = json.dumps(sector_heat, ensure_ascii=False, indent=None)
 
+    market_json = json.dumps(market_snapshot or {}, ensure_ascii=False, indent=None)
+    news_json = json.dumps(news_headlines or {}, ensure_ascii=False, indent=None)
+
     prompt = f"""你是一位擁有20年以上經驗的基金經理人，專精台股權值股波段操作。
+
+以下是「今日大盤/美股/國際市場快照」（收盤價與漲跌幅）：
+
+{market_json}
+
+以下是「今日相關新聞標題」（依關鍵字分組，可能不完整，僅供參考方向）：
+
+{news_json}
 
 以下是今天「{tab_name}」量化分析引擎產出的個股數據（JSON 格式，已按綜合排名排序）：
 
@@ -113,13 +129,18 @@ def build_prompt(summary_data: list, tab_name: str) -> str:
 
 {sector_json}
 
-請根據以上三份資料，撰寫一份繁體中文晨報，內容包含以下六個部分，請用 Markdown 標題分段：
+請根據以上五份資料，撰寫一份繁體中文晨報，內容包含以下七個部分，請用 Markdown 標題分段：
 
 ## 今天盤勢
-綜合大盤(^TWII)、上櫃(^TWOII)、以及整體風險模式(風險模式/市場模式欄位)，簡短描述今天的市場氛圍。
+綜合台股大盤/美股/國際指標（VIX、美元指數、美債殖利率等）與量化引擎的風險模式/市場模式欄位，
+簡短描述今天的市場氛圍與國際連動。
+
+## 國際新聞觀察
+從新聞標題中挑出 2-3 則可能影響台股或權值股的重點，用自己的話簡短說明（如果新聞資料是空的，
+這段可以寫「今日無重大相關新聞」，不要編造內容）。
 
 ## 今日操作策略
-根據整體訊號分佈（強力買入/買入/觀察/減碼/觀望的比例），給出今天大方向的操作建議。
+根據整體訊號分佈（強力買入/買入/觀察/減碼/觀望的比例）與大盤氛圍，給出今天大方向的操作建議。
 
 ## 類股輪動觀察
 根據「類股資金輪動熱度排行」，指出目前資金集中在哪些類股、哪些類股熱度偏低（資金退潮警示），
@@ -130,7 +151,8 @@ def build_prompt(summary_data: list, tab_name: str) -> str:
 （例如爆量、壓縮蓄勢、法人進場等），並提醒黑馬評分是短線爆發力訊號，不等於 AI 對趨勢方向的信心。
 
 ## 風險提醒
-指出目前風險模式、有沒有需要特別留意的警示（例如風險模式轉為警戒、高風險或崩盤，或某些個股訊號互相矛盾）。
+指出目前風險模式、有沒有需要特別留意的警示（例如風險模式轉為警戒、高風險或崩盤、國際指標異常，
+或某些個股訊號互相矛盾）。
 
 ## 推薦股票
 從個股數據中選出 3-5 檔最值得留意的個股，可以參考類股熱度與黑馬排行的結果交叉比對，
@@ -142,6 +164,7 @@ def build_prompt(summary_data: list, tab_name: str) -> str:
 注意：
 - 語氣專業、精簡，避免空泛的廢話。
 - 這份資料是量化模型的輸出，不是投資建議，你的角色是「協助解讀數據」，不需要加免責聲明章節，但可以在措辭上保持適度保守。
+- 新聞資料可能不完整或抓取失敗，若資料為空請誠實說明，不要編造內容。
 - 直接輸出內容本身，不要加開場白（例如「好的，以下是今天的晨報」）。
 """
     return prompt
@@ -164,8 +187,13 @@ def call_gemini(prompt: str, api_key: str) -> str:
         raise RuntimeError(f"Gemini 回傳格式異常，無法解析內容: {data}") from e
 
 
-def generate_daily_briefing(summary_data: list, tab_name: str) -> str:
-    """對外主要進入點：輸入 summary_data + 類股名稱，回傳晨報 Markdown 文字。"""
+def generate_daily_briefing(
+    summary_data: list,
+    tab_name: str,
+    market_snapshot: dict | None = None,
+    news_headlines: dict | None = None,
+) -> str:
+    """對外主要進入點：輸入 summary_data + 類股名稱 + 市場資訊，回傳晨報 Markdown 文字。"""
     api_key = os.environ.get("GEMINI_API_KEY")
     if not api_key:
         raise RuntimeError("找不到環境變數 GEMINI_API_KEY，請確認 GitHub Secrets 有設定。")
@@ -173,5 +201,5 @@ def generate_daily_briefing(summary_data: list, tab_name: str) -> str:
     if not summary_data:
         return "⚠️ 今日沒有任何個股通過篩選，無法生成晨報。"
 
-    prompt = build_prompt(summary_data, tab_name)
+    prompt = build_prompt(summary_data, tab_name, market_snapshot, news_headlines)
     return call_gemini(prompt, api_key)

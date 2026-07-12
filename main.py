@@ -2,10 +2,12 @@
 """
 每日主流程（GitHub Actions 用）
 ================================
-1. 直接呼叫 engine.py 的 run_analysis()，在 GitHub Actions 的機器上就地執行分析
+1. 抓取市場快照 + 新聞（market.py），跟權值股分析無關，先抓起來備用
+2. 直接呼叫 engine.py 的 run_analysis()，在 GitHub Actions 的機器上就地執行分析
    （不再需要連到 Hugging Face Space，也不需要 Gradio / gradio_client）
-2. 用 ai_report.py 把分析結果整理成 JSON，交給 Gemini API 生成中文 AI 晨報
-3. 把「Excel 報告」+「AI 晨報」一起用 Resend 寄出
+3. 用 ai_report.py 把分析結果 + 市場資訊整理成 JSON，交給 Gemini API 生成中文 AI 晨報
+4. 用 report_pdf.py 把晨報轉成 PDF
+5. 把「Excel 報告」+「AI 晨報 PDF」一起用 Resend 寄出（信件內文也附上晨報文字）
 
 用法：
     python main.py
@@ -25,6 +27,8 @@ import requests
 
 import engine
 import ai_report
+import market
+import report_pdf
 
 RESEND_API_URL = "https://api.resend.com/emails"
 
@@ -33,6 +37,27 @@ RESEND_API_URL = "https://api.resend.com/emails"
 # - 用 onboarding@resend.dev 寄信時，收件人只能是「當初註冊 Resend 帳號」的那個信箱
 FROM_EMAIL = "Stock Report <onboarding@resend.dev>"
 TO_EMAIL = os.environ.get("TO_EMAIL", "hai1217.chi@gmail.com")
+
+
+def fetch_market_context() -> tuple:
+    """抓市場快照 + 新聞，任何一步失敗都不能讓整個流程掛掉（用 try/except 包起來）。"""
+    print("🌍 抓取大盤/美股/國際市場快照...")
+    try:
+        snapshot = market.fetch_market_snapshot()
+        print(f"   完成，共 {sum(len(v) for v in snapshot.values())} 項指標")
+    except Exception as e:
+        print(f"   ⚠️ 市場快照抓取失敗（{e}），晨報將略過此部分")
+        snapshot = {}
+
+    print("📰 抓取相關新聞標題...")
+    try:
+        news = market.fetch_news_headlines()
+        print(f"   完成，共 {len(news)} 組關鍵字有結果")
+    except Exception as e:
+        print(f"   ⚠️ 新聞抓取失敗（{e}），晨報將略過此部分")
+        news = {}
+
+    return snapshot, news
 
 
 def run_engine_analysis():
@@ -51,10 +76,7 @@ def run_engine_analysis():
 
 
 def markdown_to_html(md_text: str) -> str:
-    """
-    非常簡易的 Markdown → HTML 轉換，只處理 email 晨報會用到的樣式：
-    ## 標題、換行段落。不追求完整 Markdown 規格，夠用即可。
-    """
+    """非常簡易的 Markdown → HTML 轉換，只處理 email 晨報會用到的樣式。"""
     lines = md_text.strip().split("\n")
     html_lines = []
     for line in lines:
@@ -70,11 +92,20 @@ def markdown_to_html(md_text: str) -> str:
     return "\n".join(html_lines)
 
 
-def send_email_with_report(excel_path: str, ai_briefing_md: str) -> None:
+def send_email_with_report(excel_path: str, pdf_path: str | None, ai_briefing_md: str) -> None:
     api_key = os.environ["RESEND_API_KEY"]
 
     with open(excel_path, "rb") as f:
         encoded_excel = base64.b64encode(f.read()).decode("utf-8")
+
+    attachments = [
+        {"filename": os.path.basename(excel_path), "content": encoded_excel},
+    ]
+
+    if pdf_path and os.path.exists(pdf_path):
+        with open(pdf_path, "rb") as f:
+            encoded_pdf = base64.b64encode(f.read()).decode("utf-8")
+        attachments.append({"filename": os.path.basename(pdf_path), "content": encoded_pdf})
 
     briefing_html = markdown_to_html(ai_briefing_md)
     html_body = f"""
@@ -85,8 +116,8 @@ def send_email_with_report(excel_path: str, ai_briefing_md: str) -> None:
         {briefing_html}
         <hr>
         <p style="color:#999; font-size: 12px;">
-            本郵件由 GitHub Actions 排程自動產生，完整量化數據請見附件 Excel 檔案。
-            內容為量化模型輸出，僅供參考，不構成投資建議。
+            本郵件由 GitHub Actions 排程自動產生，完整量化數據請見附件 Excel 檔案，
+            晨報 PDF 版本也一併附上。內容為量化模型輸出，僅供參考，不構成投資建議。
         </p>
     </div>
     """
@@ -96,12 +127,7 @@ def send_email_with_report(excel_path: str, ai_briefing_md: str) -> None:
         "to": [TO_EMAIL],
         "subject": f"{engine.SHEET_TAB_NAME} AI 晨報 {datetime.now().strftime('%Y-%m-%d')}",
         "html": html_body,
-        "attachments": [
-            {
-                "filename": os.path.basename(excel_path),
-                "content": encoded_excel,
-            }
-        ],
+        "attachments": attachments,
     }
 
     resp = requests.post(
@@ -119,11 +145,15 @@ def send_email_with_report(excel_path: str, ai_briefing_md: str) -> None:
 
 
 def main() -> None:
+    market_snapshot, news_headlines = fetch_market_context()
+
     excel_path, summary_data = run_engine_analysis()
 
     print("🤖 呼叫 Gemini 生成 AI 晨報...")
     try:
-        ai_briefing = ai_report.generate_daily_briefing(summary_data, engine.SHEET_TAB_NAME)
+        ai_briefing = ai_report.generate_daily_briefing(
+            summary_data, engine.SHEET_TAB_NAME, market_snapshot, news_headlines
+        )
     except Exception as e:
         print(f"⚠️ AI 晨報生成失敗（{e}），改寄送純 Excel 報告。", file=sys.stderr)
         ai_briefing = "（AI 晨報生成失敗，本次僅提供 Excel 數據，請見附件。）"
@@ -132,7 +162,18 @@ def main() -> None:
     print(ai_briefing)
     print("------------------------")
 
-    send_email_with_report(excel_path, ai_briefing)
+    pdf_path = None
+    try:
+        pdf_path = report_pdf.markdown_to_pdf(
+            ai_briefing,
+            output_path=f"./AI晨報_{engine.SHEET_TAB_NAME}_{datetime.now().strftime('%Y%m%d')}.pdf",
+            title=f"{engine.SHEET_TAB_NAME} AI 晨報 {datetime.now().strftime('%Y-%m-%d')}",
+        )
+        print(f"📄 PDF 晨報已產生：{pdf_path}")
+    except Exception as e:
+        print(f"⚠️ PDF 產生失敗（{e}），本次僅寄送 Excel + 信件內文。", file=sys.stderr)
+
+    send_email_with_report(excel_path, pdf_path, ai_briefing)
     print("📧 郵件已寄出。")
 
 
