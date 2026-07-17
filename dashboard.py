@@ -49,6 +49,9 @@ h1 { font-size:22px; }
 .briefing-body h2, .briefing-body h3 { font-size:14px; margin:14px 0 6px 0; color:#1a237e; }
 .briefing-body p { margin:4px 0; }
 .market-card { width:100%; }
+.overview-card { width:100%; }
+.overview-card h3 { font-size:14px; margin:10px 0 4px 0; color:#1a237e; }
+.overview-card p { margin:4px 0; font-size:13px; line-height:1.7; }
 .market-card table { border-collapse:collapse; margin:6px 0 12px 0; font-size:13px; }
 .market-card td { padding:3px 10px 3px 0; }
 .market-card .up { color:#c62828; }
@@ -94,7 +97,8 @@ def _render_card(result: dict) -> str:
 
     one_liner = ai_report.extract_section(briefing, "一句總結") or "（無總結）"
 
-    # 完整晨報內容（今天盤勢、國際新聞觀察、操作策略、類股輪動、黑馬觀察、風險提醒、推薦股票...全部呈現）
+    # 類股專屬內容（操作策略、類股輪動、黑馬觀察、風險提醒、推薦股票、一句總結）
+    # 市場總覽（今天盤勢/國際新聞觀察）已經另外用 _render_market_overview() 只顯示一次，不重複放在這裡
     briefing_html = ai_report.markdown_to_html(briefing)
 
     return f"""
@@ -139,13 +143,28 @@ def _render_market_snapshot(market_snapshot: dict) -> str:
     """
 
 
+def _render_market_overview(market_overview: str) -> str:
+    """把「今天盤勢 + 國際新聞觀察」渲染成獨立卡片，只顯示一次（不管有幾個類股）。"""
+    if not market_overview:
+        return ""
+    overview_html = ai_report.markdown_to_html(market_overview)
+    return f"""
+    <div class="card overview-card">
+        <h2>🗞️ 市場總覽</h2>
+        {overview_html}
+    </div>
+    """
+
+
 def _render_page(
     category_results: list,
     date_str: str,
     archive_links_html: str = "",
     market_snapshot: dict | None = None,
+    market_overview: str = "",
 ) -> str:
     market_card_html = _render_market_snapshot(market_snapshot or {})
+    overview_card_html = _render_market_overview(market_overview)
     cards_html = "\n".join(_render_card(r) for r in category_results)
     return f"""<!DOCTYPE html>
 <html lang="zh-Hant">
@@ -158,6 +177,7 @@ def _render_page(
 <h1>📊 每日 AI 晨報 Dashboard</h1>
 <div class="date">{date_str} 自動產生</div>
 <div class="grid">
+{overview_card_html}
 {market_card_html}
 {cards_html}
 </div>
@@ -170,10 +190,14 @@ def _render_page(
 """
 
 
-def update_dashboard(category_results: list, market_snapshot: dict | None = None) -> None:
+def update_dashboard(
+    category_results: list,
+    market_snapshot: dict | None = None,
+    market_overview: str = "",
+) -> None:
     """
     主要進入點：輸入 main.py 收集好的 category_results
-    （每個元素需要有 tab_name / summary_data / ai_briefing），以及市場快照，
+    （每個元素需要有 tab_name / summary_data / ai_briefing），以及市場快照 + 市場總覽，
     產生今天的存檔頁 + 更新首頁 index.html。
     """
     os.makedirs(REPORTS_DIR, exist_ok=True)
@@ -189,7 +213,7 @@ def update_dashboard(category_results: list, market_snapshot: dict | None = None
         f'<a href="reports/{d}.html">{d}</a>' for d in existing_dates[:14]
     )
 
-    page_html = _render_page(category_results, date_str, archive_links, market_snapshot)
+    page_html = _render_page(category_results, date_str, archive_links, market_snapshot, market_overview)
 
     # 寫入今天的存檔頁
     with open(os.path.join(REPORTS_DIR, f"{date_str}.html"), "w", encoding="utf-8") as f:
@@ -198,7 +222,7 @@ def update_dashboard(category_results: list, market_snapshot: dict | None = None
     # 更新首頁（跟今天的存檔頁內容一樣，但路徑在 docs/index.html，GitHub Pages 預設進入點）
     # 首頁裡的歷史連結需要補上「今天」自己也算一筆歷史（給明天之後的頁面連過來用）
     index_archive_links = f'<a href="reports/{date_str}.html">{date_str}</a>' + archive_links
-    index_html = _render_page(category_results, date_str, index_archive_links, market_snapshot)
+    index_html = _render_page(category_results, date_str, index_archive_links, market_snapshot, market_overview)
     with open(os.path.join(DOCS_DIR, "index.html"), "w", encoding="utf-8") as f:
         f.write(index_html)
 

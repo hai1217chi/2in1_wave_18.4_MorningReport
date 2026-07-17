@@ -43,7 +43,7 @@ import dashboard
 CATEGORIES = {
     "權值股": "630045424",
     # "面板股": "1749860219",
-    "AI概念股": "0",
+    # "AI概念股": "0",
     # "國防自主概念": "2037567856",
     # "低軌衛星概念股": "1594256368",
     # "無人機概念股": "327999020",
@@ -79,7 +79,7 @@ def fetch_market_context() -> tuple:
     return snapshot, news
 
 
-def run_one_category(tab_name: str, gid: str, market_snapshot: dict, news_headlines: dict) -> dict:
+def run_one_category(tab_name: str, gid: str, market_overview: str) -> dict:
     """跑完一個類股的完整流程（分析 → AI 晨報 → PDF），回傳結果 dict 供後續彙整。"""
     if os.environ.get("FINMIND_TOKEN"):
         engine.FINMIND_TOKEN = os.environ["FINMIND_TOKEN"]
@@ -92,19 +92,21 @@ def run_one_category(tab_name: str, gid: str, market_snapshot: dict, news_headli
     )
     print(f"✅ {tab_name} 分析完成，共 {len(summary_data)} 檔個股，Excel 已存至：{output_file}")
 
-    print(f"🤖 呼叫 Gemini 生成 {tab_name} AI 晨報...")
+    print(f"🤖 呼叫 Gemini 生成 {tab_name} 專屬分析...")
     try:
-        ai_briefing = ai_report.generate_daily_briefing(
-            summary_data, tab_name, market_snapshot, news_headlines
-        )
+        category_briefing = ai_report.generate_category_briefing(summary_data, tab_name)
     except Exception as e:
         print(f"⚠️ AI 晨報生成失敗（{e}），改用純數據摘要。", file=sys.stderr)
-        ai_briefing = "（AI 晨報生成失敗，本次僅提供 Excel 數據，請見附件。）"
+        category_briefing = "（AI 晨報生成失敗，本次僅提供 Excel 數據，請見附件。）"
+
+    # PDF 是獨立檔案，各自開啟時要能自成一份完整報告，所以把市場總覽也一起放進去；
+    # Email/Dashboard/LINE 因為會同時看到多個類股，市場總覽只在最上面顯示一次，不放進 category_briefing
+    full_text_for_pdf = f"{market_overview}\n\n{category_briefing}"
 
     pdf_path = None
     try:
         pdf_path = report_pdf.markdown_to_pdf(
-            ai_briefing,
+            full_text_for_pdf,
             output_path=f"./AI晨報_{tab_name}_{datetime.now().strftime('%Y%m%d')}.pdf",
             title=f"{tab_name} AI 晨報 {datetime.now().strftime('%Y-%m-%d')}",
         )
@@ -116,12 +118,12 @@ def run_one_category(tab_name: str, gid: str, market_snapshot: dict, news_headli
         "tab_name": tab_name,
         "excel_path": output_file,
         "pdf_path": pdf_path,
-        "ai_briefing": ai_briefing,
+        "ai_briefing": category_briefing,  # 不含市場總覽，Email/Dashboard/LINE 用這個
         "summary_data": summary_data,
     }
 
 
-def send_email_with_report(category_results: list) -> None:
+def send_email_with_report(category_results: list, market_overview: str) -> None:
     api_key = os.environ["RESEND_API_KEY"]
     today = datetime.now().strftime("%Y-%m-%d")
 
@@ -143,15 +145,20 @@ def send_email_with_report(category_results: list) -> None:
         sections_html.append("<hr>")
 
     category_names = "、".join(r["tab_name"] for r in category_results)
+    market_overview_html = ai_report.markdown_to_html(market_overview)
     html_body = f"""
     <div style="font-family: -apple-system, Arial, sans-serif; max-width: 640px;">
         <h1>📊 AI 晨報：{category_names}</h1>
         <p style="color:#666;">{today} 自動產生</p>
         <hr>
+        <h2>🌍 市場總覽</h2>
+        {market_overview_html}
+        <hr>
         {''.join(sections_html)}
         <p style="color:#999; font-size: 12px;">
             本郵件由 GitHub Actions 排程自動產生，完整量化數據請見附件 Excel 檔案，
-            各類股晨報 PDF 版本也一併附上。內容為量化模型輸出，僅供參考，不構成投資建議。
+            各類股晨報 PDF 版本也一併附上（PDF 內含市場總覽，方便單獨閱讀）。
+            內容為量化模型輸出，僅供參考，不構成投資建議。
         </p>
     </div>
     """
@@ -175,7 +182,7 @@ def send_email_with_report(category_results: list) -> None:
     resp.raise_for_status()
 
 
-def send_line_digest(category_results: list) -> None:
+def send_line_digest(category_results: list, market_overview: str) -> None:
     token = os.environ.get("LINE_CHANNEL_ACCESS_TOKEN")
     if not token:
         print("ℹ️ 未設定 LINE_CHANNEL_ACCESS_TOKEN，略過 LINE 通知。")
@@ -184,16 +191,16 @@ def send_line_digest(category_results: list) -> None:
     import line_notify
 
     try:
-        message = line_notify.build_digest_message(category_results)
+        message = line_notify.build_digest_message(category_results, market_overview)
         line_notify.send_line_broadcast(message, token)
         print("📱 LINE 通知已發送。")
     except Exception as e:
         print(f"⚠️ LINE 通知發送失敗（{e}），不影響其他流程。", file=sys.stderr)
 
 
-def update_dashboard_safe(category_results: list, market_snapshot: dict) -> None:
+def update_dashboard_safe(category_results: list, market_snapshot: dict, market_overview: str) -> None:
     try:
-        dashboard.update_dashboard(category_results, market_snapshot)
+        dashboard.update_dashboard(category_results, market_snapshot, market_overview)
     except Exception as e:
         print(f"⚠️ Dashboard 更新失敗（{e}），不影響其他流程。", file=sys.stderr)
 
@@ -201,19 +208,30 @@ def update_dashboard_safe(category_results: list, market_snapshot: dict) -> None
 def main() -> None:
     market_snapshot, news_headlines = fetch_market_context()
 
+    print("🤖 呼叫 Gemini 生成市場總覽（今天盤勢 + 國際新聞觀察，只生成一次）...")
+    try:
+        market_overview = ai_report.generate_market_overview(market_snapshot, news_headlines)
+    except Exception as e:
+        print(f"⚠️ 市場總覽生成失敗（{e}），改用預設文字。", file=sys.stderr)
+        market_overview = "## 今天盤勢\n（市場總覽生成失敗）\n\n## 國際新聞觀察\n（市場總覽生成失敗）"
+
+    print("--- 市場總覽預覽 ---")
+    print(market_overview)
+    print("------------------------")
+
     category_results = []
     for tab_name, gid in CATEGORIES.items():
-        result = run_one_category(tab_name, gid, market_snapshot, news_headlines)
+        result = run_one_category(tab_name, gid, market_overview)
         category_results.append(result)
-        print(f"--- {tab_name} AI 晨報內容預覽 ---")
+        print(f"--- {tab_name} 專屬分析預覽 ---")
         print(result["ai_briefing"])
         print("------------------------")
 
-    send_email_with_report(category_results)
+    send_email_with_report(category_results, market_overview)
     print("📧 郵件已寄出。")
 
-    send_line_digest(category_results)
-    update_dashboard_safe(category_results, market_snapshot)
+    send_line_digest(category_results, market_overview)
+    update_dashboard_safe(category_results, market_snapshot, market_overview)
 
 
 if __name__ == "__main__":

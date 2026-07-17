@@ -43,23 +43,27 @@ def send_line_broadcast(text: str, channel_access_token: str) -> None:
     resp.raise_for_status()
 
 
-def build_digest_message(category_results: list) -> str:
+def build_digest_message(category_results: list, market_overview: str) -> str:
     """
-    組出給 LINE 的摘要文字。因為 LINE 訊息有長度上限（見 _MAX_LEN），
-    這裡挑幾個晨報裡最關鍵的章節（盤勢、策略、風險、推薦股票、總結），
-    不是只放一句總結——目標是讓人不用點開 Email 也能抓到重點。
+    組出給 LINE 的摘要文字。市場總覽（今天盤勢/國際新聞觀察）只放最上面一次，
+    每個類股只列出自己專屬的重點章節（操作策略/風險提醒/推薦股票/一句總結）。
     """
     import ai_report  # 延遲 import，避免循環引用疑慮
 
+    blocks = ["📊 每日 AI 晨報摘要\n"]
+
+    for heading, label in [("今天盤勢", "📌 今天盤勢"), ("國際新聞觀察", "📰 國際新聞觀察")]:
+        content = ai_report.extract_section(market_overview, heading)
+        if content:
+            blocks.append(f"{label}\n{content}\n")
+
     sections_to_include = [
-        ("📌 今天盤勢", "今天盤勢"),
         ("🎯 今日操作策略", "今日操作策略"),
         ("⚠️ 風險提醒", "風險提醒"),
         ("💎 推薦股票", "推薦股票"),
         ("💡 一句總結", "一句總結"),
     ]
 
-    blocks = ["📊 每日 AI 晨報摘要\n"]
     for r in category_results:
         tab_name = r["tab_name"]
         briefing = r.get("ai_briefing", "")

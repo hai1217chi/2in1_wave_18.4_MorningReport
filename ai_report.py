@@ -86,13 +86,46 @@ def build_sector_heat_ranking(summary_data: list) -> list:
     return [{"類股": tag, "熱度分數(0-100)": heat} for tag, heat in ranked]
 
 
-def build_prompt(
-    summary_data: list,
-    tab_name: str,
-    market_snapshot: dict | None = None,
-    news_headlines: dict | None = None,
-) -> str:
-    """組出交給 Gemini 的完整 Prompt，固定格式，每天都用同一套。"""
+def build_market_overview_prompt(market_snapshot: dict, news_headlines: dict) -> str:
+    """
+    只組「市場總覽」的 Prompt（今天盤勢 + 國際新聞觀察），跟個股/類股資料無關。
+    這部分只會呼叫一次 Gemini，不管你同時分析幾個類股，都共用同一份市場總覽，
+    避免每個類股各自生成一次「今天盤勢」造成內容重複。
+    """
+    market_json = json.dumps(market_snapshot or {}, ensure_ascii=False, indent=None)
+    news_json = json.dumps(news_headlines or {}, ensure_ascii=False, indent=None)
+
+    return f"""你是一位擁有20年以上經驗的基金經理人，專精台股波段操作。
+
+以下是「今日大盤/美股/國際市場快照」（收盤價與漲跌幅）：
+
+{market_json}
+
+以下是「今日相關新聞標題」（依關鍵字分組，可能不完整，僅供參考方向）：
+
+{news_json}
+
+請根據以上資料，撰寫繁體中文的市場總覽，內容包含以下兩個部分，請用 Markdown 標題分段：
+
+## 今天盤勢
+綜合台股大盤/美股/國際指標（VIX、美元指數、美債殖利率等），簡短描述今天的市場氛圍與國際連動。
+
+## 國際新聞觀察
+從新聞標題中挑出 2-3 則可能影響台股的重點，用自己的話簡短說明（如果新聞資料是空的，
+這段可以寫「今日無重大相關新聞」，不要編造內容）。
+
+注意：
+- 語氣專業、精簡，避免空泛的廢話。
+- 新聞資料可能不完整或抓取失敗，若資料為空請誠實說明，不要編造內容。
+- 直接輸出內容本身，不要加開場白。
+"""
+
+
+def build_category_prompt(summary_data: list, tab_name: str) -> str:
+    """
+    組「類股專屬」的 Prompt，只包含跟這個類股資料有關的分析章節，
+    不重複生成「今天盤勢」「國際新聞觀察」（那兩段由 build_market_overview_prompt 統一生成一次）。
+    """
     compact = [_to_compact_record(d) for d in summary_data]
     data_json = json.dumps(compact, ensure_ascii=False, indent=None)
 
@@ -102,18 +135,7 @@ def build_prompt(
     sector_heat = build_sector_heat_ranking(summary_data)
     sector_json = json.dumps(sector_heat, ensure_ascii=False, indent=None)
 
-    market_json = json.dumps(market_snapshot or {}, ensure_ascii=False, indent=None)
-    news_json = json.dumps(news_headlines or {}, ensure_ascii=False, indent=None)
-
-    prompt = f"""你是一位擁有20年以上經驗的基金經理人，專精台股權值股波段操作。
-
-以下是「今日大盤/美股/國際市場快照」（收盤價與漲跌幅）：
-
-{market_json}
-
-以下是「今日相關新聞標題」（依關鍵字分組，可能不完整，僅供參考方向）：
-
-{news_json}
+    return f"""你是一位擁有20年以上經驗的基金經理人，專精台股波段操作。
 
 以下是今天「{tab_name}」量化分析引擎產出的個股數據（JSON 格式，已按綜合排名排序）：
 
@@ -129,18 +151,10 @@ def build_prompt(
 
 {sector_json}
 
-請根據以上五份資料，撰寫一份繁體中文晨報，內容包含以下七個部分，請用 Markdown 標題分段：
-
-## 今天盤勢
-綜合台股大盤/美股/國際指標（VIX、美元指數、美債殖利率等）與量化引擎的風險模式/市場模式欄位，
-簡短描述今天的市場氛圍與國際連動。
-
-## 國際新聞觀察
-從新聞標題中挑出 2-3 則可能影響台股或權值股的重點，用自己的話簡短說明（如果新聞資料是空的，
-這段可以寫「今日無重大相關新聞」，不要編造內容）。
+請根據以上三份資料，針對「{tab_name}」撰寫繁體中文分析，內容包含以下六個部分，請用 Markdown 標題分段：
 
 ## 今日操作策略
-根據整體訊號分佈（強力買入/買入/觀察/減碼/觀望的比例）與大盤氛圍，給出今天大方向的操作建議。
+根據整體訊號分佈（強力買入/買入/觀察/減碼/觀望的比例），給出今天大方向的操作建議。
 
 ## 類股輪動觀察
 根據「類股資金輪動熱度排行」，指出目前資金集中在哪些類股、哪些類股熱度偏低（資金退潮警示），
@@ -151,23 +165,20 @@ def build_prompt(
 （例如爆量、壓縮蓄勢、法人進場等），並提醒黑馬評分是短線爆發力訊號，不等於 AI 對趨勢方向的信心。
 
 ## 風險提醒
-指出目前風險模式、有沒有需要特別留意的警示（例如風險模式轉為警戒、高風險或崩盤、國際指標異常，
-或某些個股訊號互相矛盾）。
+指出目前風險模式、有沒有需要特別留意的警示（例如風險模式轉為警戒、高風險或崩盤，或某些個股訊號互相矛盾）。
 
 ## 推薦股票
 從個股數據中選出 3-5 檔最值得留意的個股，可以參考類股熱度與黑馬排行的結果交叉比對，
 說明理由（不要只是複製建議欄位，要用自己的話統整重點）。
 
 ## 一句總結
-用一句話總結今天整體策略方向。
+用一句話總結「{tab_name}」今天整體策略方向。
 
 注意：
 - 語氣專業、精簡，避免空泛的廢話。
 - 這份資料是量化模型的輸出，不是投資建議，你的角色是「協助解讀數據」，不需要加免責聲明章節，但可以在措辭上保持適度保守。
-- 新聞資料可能不完整或抓取失敗，若資料為空請誠實說明，不要編造內容。
-- 直接輸出內容本身，不要加開場白（例如「好的，以下是今天的晨報」）。
+- 直接輸出內容本身，不要加開場白（例如「好的，以下是今天的分析」）。
 """
-    return prompt
 
 
 def extract_section(md_text: str, heading: str) -> str:
@@ -228,13 +239,23 @@ def call_gemini(prompt: str, api_key: str) -> str:
         raise RuntimeError(f"Gemini 回傳格式異常，無法解析內容: {data}") from e
 
 
-def generate_daily_briefing(
-    summary_data: list,
-    tab_name: str,
-    market_snapshot: dict | None = None,
-    news_headlines: dict | None = None,
-) -> str:
-    """對外主要進入點：輸入 summary_data + 類股名稱 + 市場資訊，回傳晨報 Markdown 文字。"""
+def generate_market_overview(market_snapshot: dict | None, news_headlines: dict | None) -> str:
+    """
+    生成「市場總覽」（今天盤勢 + 國際新聞觀察），不管要分析幾個類股，這個只呼叫一次 Gemini。
+    """
+    api_key = os.environ.get("GEMINI_API_KEY")
+    if not api_key:
+        raise RuntimeError("找不到環境變數 GEMINI_API_KEY，請確認 GitHub Secrets 有設定。")
+
+    prompt = build_market_overview_prompt(market_snapshot or {}, news_headlines or {})
+    return call_gemini(prompt, api_key)
+
+
+def generate_category_briefing(summary_data: list, tab_name: str) -> str:
+    """
+    生成「類股專屬」內容（操作策略/類股輪動/黑馬觀察/風險提醒/推薦股票/一句總結），
+    每個類股各自呼叫一次 Gemini，但不包含市場總覽（避免重複）。
+    """
     api_key = os.environ.get("GEMINI_API_KEY")
     if not api_key:
         raise RuntimeError("找不到環境變數 GEMINI_API_KEY，請確認 GitHub Secrets 有設定。")
@@ -242,5 +263,5 @@ def generate_daily_briefing(
     if not summary_data:
         return "⚠️ 今日沒有任何個股通過篩選，無法生成晨報。"
 
-    prompt = build_prompt(summary_data, tab_name, market_snapshot, news_headlines)
+    prompt = build_category_prompt(summary_data, tab_name)
     return call_gemini(prompt, api_key)

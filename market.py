@@ -13,6 +13,8 @@
 """
 
 import xml.etree.ElementTree as ET
+from datetime import datetime, timedelta, timezone
+from email.utils import parsedate_to_datetime
 
 import requests
 import yfinance as yf
@@ -61,18 +63,56 @@ def fetch_market_snapshot() -> dict:
     return snapshot
 
 
+# 新聞抓取只保留最近 N 小時內的內容，避免抓到好幾天前的舊新聞
+_NEWS_MAX_AGE_HOURS = 30
+
+
+def _parse_pubdate(item: ET.Element):
+    """解析 RSS <pubDate>，失敗回傳 None（該筆新聞就不會被時間過濾掉，只是排序時排最後）。"""
+    pub_date_str = item.findtext("pubDate")
+    if not pub_date_str:
+        return None
+    try:
+        dt = parsedate_to_datetime(pub_date_str)
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        return dt
+    except Exception:
+        return None
+
+
 def _fetch_google_news(keyword: str, max_items: int = 3) -> list:
-    """用 Google News RSS 抓標題，不需要 API Key。失敗就回傳空列表。"""
+    """
+    用 Google News RSS 抓標題，不需要 API Key。
+    在查詢字串加上 "when:2d"（Google News 的時間限定語法，限定近 48 小時），
+    並且在程式端再用 <pubDate> 二次過濾（只留 _NEWS_MAX_AGE_HOURS 小時內）+ 依時間新到舊排序，
+    避免 Google News 有時候把舊聞排在搜尋結果前面的問題。失敗就回傳空列表。
+    """
     try:
         resp = requests.get(
             "https://news.google.com/rss/search",
-            params={"q": keyword, "hl": "zh-TW", "gl": "TW", "ceid": "TW:zh-Hant"},
+            params={"q": f"{keyword} when:2d", "hl": "zh-TW", "gl": "TW", "ceid": "TW:zh-Hant"},
             timeout=15,
         )
         resp.raise_for_status()
         root = ET.fromstring(resp.content)
-        items = root.findall(".//item")[:max_items]
-        return [t for t in (item.findtext("title") for item in items) if t]
+
+        now = datetime.now(timezone.utc)
+        cutoff = now - timedelta(hours=_NEWS_MAX_AGE_HOURS)
+
+        candidates = []
+        for item in root.findall(".//item"):
+            title = item.findtext("title")
+            if not title:
+                continue
+            pub_date = _parse_pubdate(item)
+            if pub_date and pub_date < cutoff:
+                continue  # 太舊的新聞直接丟掉
+            candidates.append((pub_date or cutoff, title))
+
+        # 依時間新到舊排序，最新的排最前面
+        candidates.sort(key=lambda x: x[0], reverse=True)
+        return [title for _, title in candidates[:max_items]]
     except Exception:
         return []
 
