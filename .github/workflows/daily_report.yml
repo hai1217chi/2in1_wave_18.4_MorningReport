@@ -3,7 +3,7 @@ name: 每日權值股 AI 晨報
 on:
   schedule:
     # 台灣時間 週一~週六 06:50 = UTC 週日~週五 22:50 (台灣是 UTC+8)
-    - cron: "50 22 * * 0-5"
+    - cron: "50 21 * * 0-5"
   # 允許在 GitHub 網頁上手動按按鈕，馬上跑一次來測試
   workflow_dispatch:
 
