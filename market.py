@@ -64,7 +64,7 @@ def fetch_market_snapshot() -> dict:
 
 
 # 新聞抓取只保留最近 N 小時內的內容，避免抓到好幾天前的舊新聞
-_NEWS_MAX_AGE_HOURS = 30
+_NEWS_MAX_AGE_HOURS = 24
 
 
 def _parse_pubdate(item: ET.Element):
